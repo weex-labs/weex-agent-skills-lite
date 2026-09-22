@@ -7,6 +7,9 @@ from typing import Mapping
 from urllib import request
 from urllib.parse import urlparse
 
+from weex_language import resolve_language
+from weex_message_templates import render_message
+
 
 ALLOWED_WEEX_BASE_DOMAINS = ("weex.com", "weex.tech")
 WEEX_AUTH_HEADER_NAMES = {
@@ -35,25 +38,13 @@ class BaseUrlPolicyError(ValueError):
         super().__init__(self.localized_message("en"))
 
     def localized_message(self, language: str) -> str:
-        resolved_language = "zh" if language == "zh" else "en"
-        messages = {
-            "en": {
-                "empty": "{label} cannot be empty.",
-                "shape": "{label} must be a full https URL.",
-                "userinfo": "{label} must not include username or password components.",
-                "query_fragment": "{label} must not include query or fragment components.",
-                "host": "{label} must use a weex.com or weex.tech host; got {host!r}.",
-            },
-            "zh": {
-                "empty": "{label} 不能为空。",
-                "shape": "{label} 必须是完整的 https:// URL。",
-                "userinfo": "{label} 不能包含用户名或密码。",
-                "query_fragment": "{label} 不能包含查询参数或 fragment。",
-                "host": "{label} 必须使用 weex.com 或 weex.tech 及其子域名；当前域名为 {host!r}。",
-            },
-        }
-        template = messages[resolved_language][self.reason_key]
-        return template.format(label=self.label, host=self.host)
+        resolved_language = resolve_language(language)
+        return render_message(
+            resolved_language,
+            f"url.{self.reason_key}",
+            label=self.label,
+            host=self.host,
+        )
 
 
 def _canonical_hostname(hostname: str) -> str:

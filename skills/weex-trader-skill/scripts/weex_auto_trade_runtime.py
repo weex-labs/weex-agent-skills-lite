@@ -74,7 +74,7 @@ class OfficialApiBoundary:
 
             if private:
                 api_module.ensure_private_runtime_ready(
-                    command="auto-trade.spot", auto_setup=True, language=None
+                    command="auto-trade.spot", auto_setup=True
                 )
             environment_account = self._environment_account(api_module) if private else None
             base_url = (
@@ -95,7 +95,7 @@ class OfficialApiBoundary:
 
             if private:
                 api_module.ensure_private_runtime_ready(
-                    command="auto-trade.contract", auto_setup=True, language=None
+                    command="auto-trade.contract", auto_setup=True
                 )
             environment_account = self._environment_account(api_module) if private else None
             base_url = (

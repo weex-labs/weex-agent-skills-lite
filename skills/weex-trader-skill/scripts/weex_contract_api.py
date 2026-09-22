@@ -28,14 +28,13 @@ from weex_agent_state import (
     validate_runtime_environment,
 )
 from weex_api_credentials import load_environment_account
-from weex_language import resolve_language
 from weex_url_policy import BaseUrlPolicyError, open_weex_request, validate_weex_base_url
 
 DEFAULT_BASE_URL = "https://api-contract.weex.com"
 DEFAULT_LOCALE = "en-US"
 DEFAULT_TIMEOUT = 15.0
 DEFAULT_TRADING_MODE = "live"
-TRADING_MODES = ("live", "demo")
+TRADING_MODES = ("live",)
 DAY_MS = 24 * 60 * 60 * 1000
 GET_BODY_UNSUPPORTED_MESSAGE = (
     "GET requests do not accept --body. Pass request fields with --query instead."
@@ -69,6 +68,8 @@ def load_endpoint_map() -> Dict[str, Endpoint]:
     obj = json.loads(refs.read_text(encoding="utf-8"))
     endpoint_map: Dict[str, Endpoint] = {}
     for d in obj.get("definitions", []):
+        if str(d.get("key") or "").startswith("sim.") or str(d.get("path") or "").startswith("/capi/v3/sim/"):
+            continue
         method = d.get("method", "GET").upper()
         auth = bool(d.get("requires_auth", False))
         permission = str(d.get("permission", ""))
@@ -340,63 +341,33 @@ def output_json(payload: Dict[str, Any], pretty: bool) -> None:
 def normalize_trading_mode(raw: str | None, *, required: bool = False) -> str:
     if raw in (None, ""):
         if required:
-            raise SystemExit("trading_mode_required: choose live or demo for private contract operations")
+            raise SystemExit("trading_mode_required: choose live for private contract operations")
         return DEFAULT_TRADING_MODE
     mode = str(raw).strip().lower()
+    if mode == "demo":
+        raise SystemExit("DEMO_MODE_REMOVED: Futures demo trading is no longer supported")
     if mode not in TRADING_MODES:
         raise SystemExit(f"invalid_trading_mode: expected one of {', '.join(TRADING_MODES)}")
     return mode
 
 
-def endpoint_is_demo(endpoint: Endpoint) -> bool:
-    return endpoint.key.startswith("sim.") or endpoint.path.startswith("/capi/v3/sim/")
-
-
 def environment_for_mode(trading_mode: str) -> Dict[str, Any]:
-    mode = normalize_trading_mode(trading_mode)
-    if mode == "demo":
-        return {
-            "trading_mode": "demo",
-            "label": "demo",
-            "market": "futures",
-            "uses_real_funds": False,
-            "notice": "This operation targets WEEX futures demo mode.",
-        }
-    return {
+    normalize_trading_mode(trading_mode)
+    environment = {
         "trading_mode": "live",
         "label": "live",
         "market": "futures",
         "uses_real_funds": True,
-        "notice": "This operation targets real WEEX futures trading.",
     }
-
-
-def user_environment_prefix(environment: Dict[str, Any], language: Optional[str] = None) -> str:
-    resolved_language = resolve_language(language)
-    mode = normalize_trading_mode(str(environment.get("trading_mode") or DEFAULT_TRADING_MODE))
-    if resolved_language == "zh":
-        label = "模拟盘" if mode == "demo" else "真实盘"
-        return f"当前交易环境：{label}"
-    label = "demo trading" if mode == "demo" else "real trading"
-    return f"Current trading mode: {label}"
+    return environment
 
 
 def add_environment_context(payload: Dict[str, Any], environment: Dict[str, Any]) -> None:
     payload["environment"] = environment
-    payload["user_environment_prefix"] = user_environment_prefix(environment)
 
 
 def validate_endpoint_trading_mode(endpoint: Endpoint, trading_mode: str) -> str:
     mode = normalize_trading_mode(trading_mode)
-    is_demo = endpoint_is_demo(endpoint)
-    if is_demo and mode != "demo":
-        raise SystemExit(
-            f"demo_endpoint_requires_demo_mode: endpoint {endpoint.key} requires --trading-mode demo"
-        )
-    if mode == "demo" and endpoint.auth and not is_demo:
-        raise SystemExit(
-            f"demo_endpoint_unsupported: endpoint {endpoint.key} is not a simulated futures endpoint"
-        )
     return mode
 
 
@@ -405,19 +376,10 @@ def validate_confirm_flags(
     trading_mode: str,
     dry_run: bool,
     confirm_live: bool,
-    confirm_demo: bool,
 ) -> None:
-    if confirm_live and confirm_demo:
-        raise SystemExit("confirm_flag_mode_mismatch: pass only one of --confirm-live or --confirm-demo")
     if not endpoint.mutating or dry_run:
         return
-    if trading_mode == "demo":
-        if not confirm_demo or confirm_live:
-            raise SystemExit(
-                f"confirm_flag_mode_mismatch: demo mutating request for {endpoint.key} requires --confirm-demo"
-            )
-        return
-    if not confirm_live or confirm_demo:
+    if not confirm_live:
         raise SystemExit(
             f"confirm_flag_mode_mismatch: live mutating request for {endpoint.key} requires --confirm-live"
         )
@@ -517,12 +479,11 @@ def execute_endpoint(
     body: Dict[str, Any],
     dry_run: bool,
     confirm_live: bool,
-    confirm_demo: bool,
     trading_mode: str | None,
     pretty: bool,
 ) -> int:
     if trading_mode in (None, "") and ENDPOINTS[endpoint_key].auth:
-        raise SystemExit("trading_mode_required: choose live or demo for private contract operations")
+        raise SystemExit("trading_mode_required: choose live for private contract operations")
     effective_mode = normalize_trading_mode(trading_mode)
     code, payload = execute_endpoint_payload(
         client=client,
@@ -531,7 +492,6 @@ def execute_endpoint(
         body=body,
         dry_run=dry_run,
         confirm_live=confirm_live,
-        confirm_demo=confirm_demo,
         trading_mode=effective_mode,
     )
     output_json(payload, pretty)
@@ -546,14 +506,13 @@ def execute_endpoint_payload(
     body: Dict[str, Any],
     dry_run: bool,
     confirm_live: bool,
-    confirm_demo: bool,
     trading_mode: str | None,
 ) -> tuple[int, Dict[str, Any]]:
     endpoint = ENDPOINTS[endpoint_key]
     if trading_mode in (None, "") and endpoint.auth:
-        raise SystemExit("trading_mode_required: choose live or demo for private contract operations")
+        raise SystemExit("trading_mode_required: choose live for private contract operations")
     mode = validate_endpoint_trading_mode(endpoint, normalize_trading_mode(trading_mode))
-    validate_confirm_flags(endpoint, mode, dry_run, confirm_live, confirm_demo)
+    validate_confirm_flags(endpoint, mode, dry_run, confirm_live)
     validate_pending_order_routing(endpoint, body)
     validate_endpoint_constraints(endpoint, query, body)
 
@@ -620,15 +579,6 @@ def normalize_contract_trade_symbol(symbol: str) -> str:
     raise SystemExit(f"Unsupported symbol format: {symbol}. Expected like ETHUSDT.")
 
 
-def normalize_contract_demo_trade_symbol(symbol: str) -> str:
-    normalized = normalize_contract_trade_symbol(symbol)
-    if normalized.endswith("SUSDT"):
-        return normalized
-    if normalized.endswith("USDT"):
-        return f"{normalized[:-4]}SUSDT"
-    return normalized
-
-
 def normalize_contract_symbol(symbol: str) -> str:
     return normalize_contract_trade_symbol(symbol)
 
@@ -673,7 +623,6 @@ def cmd_call(args: argparse.Namespace, client: WeexContractClient) -> int:
         body=body,
         dry_run=args.dry_run,
         confirm_live=args.confirm_live,
-        confirm_demo=args.confirm_demo,
         trading_mode=args.trading_mode,
         pretty=args.pretty,
     )
@@ -681,11 +630,7 @@ def cmd_call(args: argparse.Namespace, client: WeexContractClient) -> int:
 
 def cmd_place_order(args: argparse.Namespace, client: WeexContractClient) -> int:
     mode = normalize_trading_mode(args.trading_mode, required=True)
-    body_symbol = (
-        normalize_contract_demo_trade_symbol(args.symbol)
-        if mode == "demo"
-        else normalize_contract_trade_symbol(args.symbol)
-    )
+    body_symbol = normalize_contract_trade_symbol(args.symbol)
     body: Dict[str, Any] = {
         "symbol": body_symbol,
         "side": args.side.upper(),
@@ -718,11 +663,7 @@ def cmd_place_order(args: argparse.Namespace, client: WeexContractClient) -> int
         if "timeInForce" in body:
             raise SystemExit("time-in-force must be omitted when type=MARKET")
 
-    endpoint_key = (
-        "sim.transaction.place_order"
-        if mode == "demo"
-        else "transaction.place_order"
-    )
+    endpoint_key = "transaction.place_order"
 
     return execute_endpoint(
         client=client,
@@ -731,7 +672,6 @@ def cmd_place_order(args: argparse.Namespace, client: WeexContractClient) -> int
         body=body,
         dry_run=args.dry_run,
         confirm_live=args.confirm_live,
-        confirm_demo=args.confirm_demo,
         trading_mode=args.trading_mode,
         pretty=args.pretty,
     )
@@ -753,7 +693,6 @@ def cmd_cancel_order(args: argparse.Namespace, client: WeexContractClient) -> in
         body={},
         dry_run=args.dry_run,
         confirm_live=args.confirm_live,
-        confirm_demo=False,
         trading_mode=DEFAULT_TRADING_MODE,
         pretty=args.pretty,
     )
@@ -767,7 +706,6 @@ def cmd_ticker(args: argparse.Namespace, client: WeexContractClient) -> int:
         body={},
         dry_run=False,
         confirm_live=False,
-        confirm_demo=False,
         trading_mode=DEFAULT_TRADING_MODE,
         pretty=args.pretty,
     )
@@ -784,7 +722,6 @@ def cmd_poll_ticker(args: argparse.Namespace, client: WeexContractClient) -> int
             body={},
             dry_run=False,
             confirm_live=False,
-            confirm_demo=False,
             trading_mode=DEFAULT_TRADING_MODE,
             pretty=args.pretty,
         )
@@ -806,7 +743,6 @@ def add_trading_mode_argument(parser: argparse.ArgumentParser) -> None:
 
 def add_confirm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--confirm-live", action="store_true", help="Allow live mutating requests")
-    parser.add_argument("--confirm-demo", action="store_true", help="Allow demo mutating requests")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -933,7 +869,7 @@ def main() -> int:
                 + "\n".join(f"- {issue}" for issue in environment_validation["issues"])
             )
         try:
-            ensure_private_runtime_ready(command=command_name, auto_setup=True, language=None)
+            ensure_private_runtime_ready(command=command_name, auto_setup=True)
         except RuntimePreflightError as exc:
             raise SystemExit(str(exc)) from exc
 

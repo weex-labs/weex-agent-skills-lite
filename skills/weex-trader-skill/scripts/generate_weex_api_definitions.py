@@ -42,13 +42,6 @@ KEY_OVERRIDES = {
     ("spot", "GetAllProductInfo"): "spot.config.get_api_trading_symbols",
 }
 
-DEMO_KEY_MAP = {
-    "GetAccountBalance": "sim.account.get_account_balance",
-    "GetAllPositions": "sim.account.get_all_positions",
-    "GetOrderHistory": "sim.transaction.get_order_history",
-    "PlaceOrder": "sim.transaction.place_order",
-}
-
 EXCLUDED_DOC_URLS: set[str] = set()
 
 
@@ -122,8 +115,6 @@ def parse_rate_limits(text: str) -> tuple[Optional[int], List[Dict[str, Any]]]:
 
 
 def get_group(product: str, path_parts: List[str]) -> Optional[str]:
-    if product == "contract" and len(path_parts) > 2 and path_parts[2] == "demo":
-        return "sim"
     group_segment = path_parts[2] if len(path_parts) > 2 else ""
     if product == "contract":
         return CONTRACT_GROUP_MAP.get(group_segment)
@@ -393,9 +384,7 @@ def parse_doc(url: str) -> Optional[ParsedDoc]:
     title_node = markdown.find("h1") or markdown.find("header")
     title = clean_text(title_node.get_text(" ", strip=True)) if title_node else path_parts[-1]
 
-    if category == "sim":
-        key = DEMO_KEY_MAP.get(path_parts[-1], f"sim.{slugify(path_parts[-1])}")
-    elif (product, path_parts[-1]) in KEY_OVERRIDES:
+    if (product, path_parts[-1]) in KEY_OVERRIDES:
         key = KEY_OVERRIDES[(product, path_parts[-1])]
     else:
         key = f"{category}.{slugify(path_parts[-1])}"
@@ -452,7 +441,7 @@ def iter_doc_urls(product: str, sitemap_urls: Iterable[str]) -> List[str]:
             )
         else:
             included = bool(
-                re.search(r"/api-doc/contract/(?:Account_API|Market_API|Transaction_API|demo)/", url)
+                re.search(r"/api-doc/contract/(?:Account_API|Market_API|Transaction_API)/", url)
             )
         if not included:
             continue
@@ -553,7 +542,6 @@ def apply_known_overrides(product: str, docs: List[ParsedDoc]) -> None:
             "transaction.get_order_history": "transaction.get_single_order_info",
             "transaction.place_orders_batch": "transaction.place_order",
             "transaction.place_pending_order": "transaction.place_order",
-            "sim.transaction.get_order_history": "transaction.get_single_order_info",
         }
         for target_key, source_key in response_references.items():
             copy_response(target_key, source_key)
@@ -566,16 +554,6 @@ def apply_known_overrides(product: str, docs: List[ParsedDoc]) -> None:
                 "When both symbol and positionId are provided, positionId has priority; "
                 "the position must belong to the supplied symbol."
             )
-
-        demo_order = find_doc(docs, "sim.transaction.place_order")
-        if demo_order is not None:
-            time_in_force = next(
-                (row for row in demo_order.request_params if row.get("name") == "timeInForce"),
-                None,
-            )
-            if time_in_force is not None and "POST_ONLY" not in time_in_force.get("description", ""):
-                description = time_in_force.get("description", "").rstrip(". ")
-                time_in_force["description"] = f"{description}, POST_ONLY."
 
 
 def docs_to_json(product: str, docs: List[ParsedDoc]) -> Dict[str, Any]:
@@ -643,14 +621,6 @@ def render_md(product: str, docs: List[ParsedDoc], generated_at: str) -> str:
         "",
         f"Generated from live V3 docs on {generated_at}.",
     ]
-    if product == "contract" and any(doc.key.startswith("sim.") for doc in docs):
-        lines.extend(
-            [
-                "",
-                "Contract simulated futures endpoints are maintained in this generated catalog from the official WEEX contract demo API docs.",
-                "Demo is not a local dry-run; demo mutating endpoints send requests to WEEX futures demo mode.",
-            ]
-        )
     lines.extend(
         [
             "",

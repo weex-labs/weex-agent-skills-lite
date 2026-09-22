@@ -11,7 +11,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from weex_language import resolve_language
 
 
 DAY_MS = 24 * 60 * 60 * 1000
@@ -28,7 +27,7 @@ SPOT_ORDER_SAFE_LIMIT = 100
 MAX_SPOT_HISTORY_WINDOW_DAYS = 90
 KLINE_LIMIT = 100
 DEFAULT_TRADING_MODE = "live"
-TRADING_MODES = ("live", "demo")
+TRADING_MODES = ("live",)
 LONG_SIDES = {"long", "buy", "bull"}
 SHORT_SIDES = {"short", "sell", "bear"}
 SPOT_QUOTE_ASSET_FALLBACKS = ("USDT", "USDC", "BTC", "ETH")
@@ -72,57 +71,30 @@ def _validate_market(market: str) -> str:
 
 def _normalize_trading_mode(raw: Any) -> str:
     mode = str(raw or DEFAULT_TRADING_MODE).strip().lower()
+    if mode == "demo":
+        raise AggregationInputError("DEMO_MODE_REMOVED: demo trading is no longer supported")
     if mode not in TRADING_MODES:
         raise AggregationInputError(f"invalid_trading_mode: expected one of {', '.join(TRADING_MODES)}")
     return mode
 
 
 def _validate_trading_mode_market(trading_mode: str, market: str) -> str:
-    mode = _normalize_trading_mode(trading_mode)
-    if mode == "demo" and market != "futures":
-        raise AggregationInputError("demo_spot_unsupported: demo trading_mode is only supported for futures")
-    return mode
+    return _normalize_trading_mode(trading_mode)
 
 
 def _environment_for_trading_mode(trading_mode: str, market: str) -> dict[str, Any]:
-    mode = _normalize_trading_mode(trading_mode)
-    if mode == "demo":
-        return {
-            "trading_mode": "demo",
-            "label": "demo",
-            "market": "futures",
-            "uses_real_funds": False,
-            "notice": "This operation targets WEEX futures demo mode.",
-        }
-    return {
+    _normalize_trading_mode(trading_mode)
+    environment = {
         "trading_mode": "live",
         "label": "live",
         "market": market,
         "uses_real_funds": True,
-        "notice": f"This operation targets real WEEX {market} trading.",
     }
-
-
-def _user_environment_prefix(environment: dict[str, Any], language: str | None = None) -> str:
-    resolved_language = resolve_language(language)
-    mode = _normalize_trading_mode(environment.get("trading_mode"))
-    if resolved_language == "zh":
-        label = "模拟盘" if mode == "demo" else "真实盘"
-        return f"当前交易环境：{label}"
-    label = "demo trading" if mode == "demo" else "real trading"
-    return f"Current trading mode: {label}"
-
-
-def _normalize_demo_symbol_for_display(raw: Any) -> str:
-    symbol = str(raw or "UNKNOWN").strip().upper()
-    if symbol.endswith("SUSDT") and len(symbol) > len("SUSDT"):
-        return f"{symbol[:-5]}USDT"
-    return symbol or "UNKNOWN"
+    return environment
 
 
 def _normalize_symbol_for_trading_mode(raw: Any, trading_mode: str) -> str:
-    if _normalize_trading_mode(trading_mode) == "demo":
-        return _normalize_demo_symbol_for_display(raw)
+    _normalize_trading_mode(trading_mode)
     return str(raw or "UNKNOWN")
 
 
@@ -164,8 +136,6 @@ def _normalize_account_scope(
     explicit = _pick(mapping or {}, "account_scope", "accountScope")
     if explicit not in (None, ""):
         return str(explicit)
-    if _normalize_trading_mode(trading_mode) == "demo" and market == "futures":
-        return "sim_futures"
     if market == "futures":
         return "personal_futures"
     if market == "spot":
@@ -1158,6 +1128,7 @@ class TradeDataAggregator:
         market: str,
         trading_mode: str = DEFAULT_TRADING_MODE,
         raw_order: dict[str, Any],
+        language: str | None = None,
     ) -> dict[str, Any]:
         normalized_market = _validate_market(market)
         mode = _validate_trading_mode_market(trading_mode, normalized_market)
@@ -1220,33 +1191,20 @@ class TradeDataAggregator:
                 constraints=constraints,
             )
             partial = partial or recent_orders_partial
-            if mode == "demo":
-                partial = True
-                _merge_degraded_reasons(
-                    degraded_reasons,
-                    [
-                        "demo_futures_open_orders_unavailable",
-                        "demo_futures_conditional_orders_unavailable",
-                        "demo_futures_tp_sl_state_unavailable",
-                    ],
-                )
-                open_orders = []
-                conditional_orders = []
-            else:
-                open_orders = _normalize_orders(
-                    self.fetcher.fetch_futures_open_orders(
-                        profile_name=profile_name,
-                        symbol=symbol,
-                    ),
-                    "futures",
-                )
-                conditional_orders = _normalize_orders(
-                    self.fetcher.fetch_futures_pending_orders(
-                        profile_name=profile_name,
-                        symbol=symbol,
-                    ),
-                    "futures",
-                )
+            open_orders = _normalize_orders(
+                self.fetcher.fetch_futures_open_orders(
+                    profile_name=profile_name,
+                    symbol=symbol,
+                ),
+                "futures",
+            )
+            conditional_orders = _normalize_orders(
+                self.fetcher.fetch_futures_pending_orders(
+                    profile_name=profile_name,
+                    symbol=symbol,
+                ),
+                "futures",
+            )
             if symbol:
                 fetch_product = getattr(self.fetcher, "fetch_futures_product_info", None)
                 if callable(fetch_product):
@@ -1349,7 +1307,7 @@ class TradeDataAggregator:
             )
         else:
             account_snapshot = {
-                "account_scope": "sim_futures" if mode == "demo" else "personal_futures",
+                "account_scope": "personal_futures",
                 "equity": primary_balance.get("equity") if primary_balance else None,
                 "available_balance": primary_balance.get("available_balance") if primary_balance else None,
             }
@@ -1372,7 +1330,6 @@ class TradeDataAggregator:
         return {
             "trading_mode": mode,
             "environment": environment,
-            "user_environment_prefix": _user_environment_prefix(environment),
             "order_preview": order_preview,
             "tp_sl": tp_sl,
             "account_snapshot": account_snapshot,
@@ -1450,33 +1407,20 @@ class TradeDataAggregator:
                 constraints=constraints,
             )
             partial = partial or recent_orders_partial
-            if mode == "demo":
-                partial = True
-                _merge_degraded_reasons(
-                    degraded_reasons,
-                    [
-                        "demo_futures_open_orders_unavailable",
-                        "demo_futures_conditional_orders_unavailable",
-                        "demo_futures_tp_sl_state_unavailable",
-                    ],
-                )
-                open_orders = []
-                conditional_orders = []
-            else:
-                open_orders = _normalize_orders(
-                    self.fetcher.fetch_futures_open_orders(
-                        profile_name=profile_name,
-                        symbol=normalized_symbol,
-                    ),
-                    "futures",
-                )
-                conditional_orders = _normalize_orders(
-                    self.fetcher.fetch_futures_pending_orders(
-                        profile_name=profile_name,
-                        symbol=normalized_symbol,
-                    ),
-                    "futures",
-                )
+            open_orders = _normalize_orders(
+                self.fetcher.fetch_futures_open_orders(
+                    profile_name=profile_name,
+                    symbol=normalized_symbol,
+                ),
+                "futures",
+            )
+            conditional_orders = _normalize_orders(
+                self.fetcher.fetch_futures_pending_orders(
+                    profile_name=profile_name,
+                    symbol=normalized_symbol,
+                ),
+                "futures",
+            )
             if not market_snapshot_symbol:
                 market_snapshot_symbol = _pick_primary_futures_symbol(
                     positions=positions,
@@ -1591,7 +1535,7 @@ class TradeDataAggregator:
             )
         else:
             account_snapshot = {
-                "account_scope": "sim_futures" if mode == "demo" else "personal_futures",
+                "account_scope": "personal_futures",
                 "equity": primary_balance.get("equity") if primary_balance else None,
                 "available_balance": primary_balance.get("available_balance") if primary_balance else None,
             }
@@ -1602,7 +1546,6 @@ class TradeDataAggregator:
             "context": "account_facts",
             "trading_mode": mode,
             "environment": environment,
-            "user_environment_prefix": _user_environment_prefix(environment, language),
             "market": normalized_market,
             "symbol": normalized_symbol,
             "account_snapshot": account_snapshot,
@@ -1647,7 +1590,6 @@ class WeexApiFetcher:
         contract_api.ensure_private_runtime_ready(
             command="trade-aggregator.contract",
             auto_setup=True,
-            language=None,
         )
         env_base_url = os.getenv("WEEX_CONTRACT_API_BASE") or os.getenv("WEEX_API_BASE")
         base_url = env_base_url or contract_api.DEFAULT_BASE_URL
@@ -1695,7 +1637,6 @@ class WeexApiFetcher:
         spot_api.ensure_private_runtime_ready(
             command="trade-aggregator.spot",
             auto_setup=True,
-            language=None,
         )
         env_base_url = os.getenv("WEEX_SPOT_API_BASE") or os.getenv("WEEX_API_BASE")
         base_url = env_base_url or spot_api.DEFAULT_BASE_URL
@@ -1782,15 +1723,12 @@ class WeexApiFetcher:
         profile_name: str,
         trading_mode: str = DEFAULT_TRADING_MODE,
     ) -> Any:
-        mode = _normalize_trading_mode(trading_mode)
-        endpoint_key = "sim.account.get_account_balance" if mode == "demo" else "account.get_account_balance"
+        _normalize_trading_mode(trading_mode)
         kwargs: dict[str, Any] = {
             "profile_name": profile_name,
-            "endpoint_key": endpoint_key,
+            "endpoint_key": "account.get_account_balance",
             "query": {},
         }
-        if mode == "demo":
-            kwargs["trading_mode"] = mode
         return self._send_contract_request(**kwargs)
 
     def fetch_futures_positions(
@@ -1799,15 +1737,12 @@ class WeexApiFetcher:
         profile_name: str,
         trading_mode: str = DEFAULT_TRADING_MODE,
     ) -> Any:
-        mode = _normalize_trading_mode(trading_mode)
-        endpoint_key = "sim.account.get_all_positions" if mode == "demo" else "account.get_all_positions"
+        _normalize_trading_mode(trading_mode)
         kwargs: dict[str, Any] = {
             "profile_name": profile_name,
-            "endpoint_key": endpoint_key,
+            "endpoint_key": "account.get_all_positions",
             "query": {},
         }
-        if mode == "demo":
-            kwargs["trading_mode"] = mode
         return self._send_contract_request(**kwargs)
 
     def fetch_futures_orders(
@@ -1819,14 +1754,10 @@ class WeexApiFetcher:
         end_ms: int,
         symbol: str | None,
     ) -> Any:
-        mode = _normalize_trading_mode(trading_mode)
-        endpoint_key = "sim.transaction.get_order_history" if mode == "demo" else "transaction.get_order_history"
+        _normalize_trading_mode(trading_mode)
+        endpoint_key = "transaction.get_order_history"
         normalized_symbol = str(symbol or "").strip().upper() or None
         upstream_symbol = normalized_symbol
-        local_demo_symbol = None
-        if mode == "demo" and normalized_symbol and not normalized_symbol.endswith("SUSDT"):
-            upstream_symbol = None
-            local_demo_symbol = normalized_symbol
         rows: list[dict[str, Any]] = []
         for window in split_time_range(start_ms, end_ms, max_span_days=MAX_FUTURES_WINDOW_DAYS):
             page = 0
@@ -1844,8 +1775,6 @@ class WeexApiFetcher:
                     "endpoint_key": endpoint_key,
                     "query": query,
                 }
-                if mode == "demo":
-                    kwargs["trading_mode"] = mode
                 payload = self._send_contract_request(**kwargs)
                 page_rows = _extract_list_payload(payload, "items", "orders")
                 if not page_rows:
@@ -1858,13 +1787,6 @@ class WeexApiFetcher:
                 if len(page_rows) < FUTURES_ORDER_LIMIT:
                     break
                 page += 1
-        if local_demo_symbol:
-            rows = [
-                row
-                for row in rows
-                if _normalize_demo_symbol_for_display(_pick(row, "symbol", "instId"))
-                == local_demo_symbol
-            ]
         return rows
 
     def fetch_futures_klines(

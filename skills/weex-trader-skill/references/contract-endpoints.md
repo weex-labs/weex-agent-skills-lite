@@ -15,13 +15,7 @@ Catalog groups use endpoint-key prefixes, not a promise that every URL shares on
 - Market: `market.*`; for example, `GET /capi/v3/market/ticker/24hr`
 - Account: `account.*`; for example, `GET /capi/v3/account/balance`
 - Transaction: `transaction.*`; for example, `POST /capi/v3/order`
-- Simulated futures trading: `sim.*`; for example, `POST /capi/v3/sim/order`
-
-List only the 4 official simulated futures endpoints:
-
-```bash
-python3 scripts/weex_contract_api.py list-endpoints --group sim --pretty
-```
+The generated catalog contains live Spot/Futures endpoints only; simulated endpoints are excluded from the reference and runtime registries.
 
 Use the script for full live list:
 

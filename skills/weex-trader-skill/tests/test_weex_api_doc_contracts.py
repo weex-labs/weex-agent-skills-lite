@@ -195,7 +195,7 @@ class GeneratorRegressionTests(unittest.TestCase):
         self.assertEqual(parsed.query_fields, ["symbol", "interval", "limit"])
         self.assertEqual(parsed.request_params[-1]["name"], "limit")
 
-    def test_url_collection_includes_tax_and_demo_pages_but_excludes_partner_pages(self) -> None:
+    def test_url_collection_includes_tax_but_excludes_demo_and_partner_pages(self) -> None:
         generator = load_generator()
         tax = "https://www.weex.com/api-doc/spot/tax/GetSpotAccountRecord"
         rebate = "https://www.weex.com/api-doc/partner/rebate-endpoints/GetAffiliateCommission"
@@ -207,7 +207,15 @@ class GeneratorRegressionTests(unittest.TestCase):
 
         self.assertIn(tax, spot_urls)
         self.assertNotIn(rebate, spot_urls)
-        self.assertIn(demo, contract_urls)
+        self.assertNotIn(demo, contract_urls)
+
+    def test_demo_pages_are_not_parsed_into_contract_definitions(self) -> None:
+        generator = load_generator()
+        self.assertIsNone(
+            generator.parse_doc(
+                "https://www.weex.com/api-doc/contract/demo/PlaceOrder"
+            )
+        )
 
 
 class CheckedInDefinitionRegressionTests(unittest.TestCase):
@@ -298,7 +306,7 @@ class CheckedInDefinitionRegressionTests(unittest.TestCase):
 
     def test_contract_definitions_match_current_official_contract(self) -> None:
         payload, by_key = load_definitions("contract")
-        self.assertEqual(len(payload["definitions"]), 47)
+        self.assertEqual(len(payload["definitions"]), 43)
 
         bills = by_key["account.get_contract_bills"]
         self.assertTrue({"nextKeyId", "nextKeyTime"}.issubset(params_by_name(bills, "request_params")))
@@ -361,7 +369,6 @@ class CheckedInDefinitionRegressionTests(unittest.TestCase):
             "transaction.get_order_history": "transaction.get_single_order_info",
             "transaction.place_orders_batch": "transaction.place_order",
             "transaction.place_pending_order": "transaction.place_order",
-            "sim.transaction.get_order_history": "transaction.get_single_order_info",
         }
         for key, source_key in expected_sources.items():
             with self.subTest(key=key):
@@ -406,15 +413,15 @@ class CheckedInDefinitionRegressionTests(unittest.TestCase):
         for definition in [*spot_payload["definitions"], *load_definitions("contract")[0]["definitions"]]:
             self.assertNotIn("weight_uid", definition)
 
-    def test_demo_definitions_are_generated_from_current_pages_with_chinese_contract_override(self) -> None:
-        _, by_key = load_definitions("contract")
-        demo = by_key["sim.transaction.place_order"]
-        self.assertTrue(demo["doc_url"].endswith("/contract/demo/PlaceOrder"))
-        self.assertIn("POST_ONLY", params_by_name(demo, "request_params")["timeInForce"]["description"])
-        self.assertEqual(
-            {item["header"]: item["limit"] for item in demo["rate_limits"]},
-            {"X-ORDER-COUNT-10S": 1, "X-ORDER-COUNT-1M": 1, "X-USED-WEIGHT-1M": 0},
+    def test_checked_in_contract_definitions_exclude_simulated_endpoints(self) -> None:
+        payload, by_key = load_definitions("contract")
+        self.assertFalse(any(key.startswith("sim.") for key in by_key))
+        self.assertFalse(
+            any(str(item.get("path", "")).startswith("/capi/v3/sim/") for item in payload["definitions"])
         )
+        markdown = (ROOT / "references" / "contract-api-definitions.md").read_text(encoding="utf-8")
+        self.assertNotIn("sim.", markdown)
+        self.assertNotIn("/capi/v3/sim/", markdown)
 
     def test_generated_definitions_do_not_contain_mojibake(self) -> None:
         combined = "\n".join(

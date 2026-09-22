@@ -40,12 +40,12 @@ class RuntimeSetupTests(unittest.TestCase):
                 "refresh_agent_records",
                 return_value={"runtime": runtime_state},
             ) as refresh_mock:
-                report = runtime_setup.build_setup_report(language="zh")
+                report = runtime_setup.build_setup_report()
 
         self.assertTrue(report["ok"])
         self.assertFalse(report["pip"]["ensurepip_attempted"])
         self.assertEqual(report["pip"]["install"]["returncode"], 0)
-        refresh_mock.assert_called_once_with(preferred_language="zh", command="env.setup")
+        refresh_mock.assert_called_once_with(command="env.setup")
 
         commands = [call.args[0] for call in run_mock.call_args_list]
         self.assertEqual(commands[0], [sys.executable, "-m", "pip", "--version"])
@@ -87,7 +87,7 @@ class RuntimeSetupTests(unittest.TestCase):
                 "refresh_agent_records",
                 return_value={"runtime": runtime_state},
             ):
-                report = runtime_setup.build_setup_report(language=None)
+                report = runtime_setup.build_setup_report()
 
         self.assertTrue(report["ok"])
         self.assertTrue(report["pip"]["ensurepip_attempted"])
@@ -120,7 +120,7 @@ class RuntimeSetupTests(unittest.TestCase):
                 "refresh_agent_records",
                 return_value={"runtime": runtime_state},
             ):
-                report = runtime_setup.build_setup_report(language="en")
+                report = runtime_setup.build_setup_report()
 
         self.assertFalse(report["ok"])
         self.assertEqual(report["runtime"]["env_validation"]["issues"], runtime_state["env_validation"]["issues"])

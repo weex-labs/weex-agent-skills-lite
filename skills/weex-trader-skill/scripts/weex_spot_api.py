@@ -28,13 +28,12 @@ from weex_agent_state import (
     validate_runtime_environment,
 )
 from weex_api_credentials import load_environment_account
-from weex_language import resolve_language
 from weex_url_policy import BaseUrlPolicyError, open_weex_request, validate_weex_base_url
 
 DEFAULT_BASE_URL = "https://api-spot.weex.com"
 DEFAULT_LOCALE = "en-US"
 DEFAULT_TIMEOUT = 15.0
-TRADING_MODES = ("live", "demo")
+TRADING_MODES = ("live",)
 GET_BODY_UNSUPPORTED_MESSAGE = (
     "GET requests do not accept --body. Pass request fields with --query instead."
 )
@@ -330,13 +329,13 @@ def is_mutating(endpoint: Endpoint) -> bool:
 
 
 def private_environment() -> Dict[str, Any]:
-    return {
+    environment = {
         "trading_mode": "live",
         "label": "live",
         "market": "spot",
         "uses_real_funds": True,
-        "notice": "This operation targets real WEEX spot trading.",
     }
+    return environment
 
 
 def normalize_trading_mode(raw: Optional[str], *, required: bool = False) -> str:
@@ -345,23 +344,15 @@ def normalize_trading_mode(raw: Optional[str], *, required: bool = False) -> str
             raise SystemExit("trading_mode_required: choose live for private spot operations")
         return "live"
     mode = str(raw).strip().lower()
+    if mode == "demo":
+        raise SystemExit("DEMO_MODE_REMOVED: Spot demo trading is no longer supported")
     if mode not in TRADING_MODES:
         raise SystemExit(f"invalid_trading_mode: expected one of {', '.join(TRADING_MODES)}")
-    if mode == "demo":
-        raise SystemExit("demo_spot_unsupported: spot demo trading is not supported by WEEX")
     return mode
-
-
-def user_environment_prefix(environment: Dict[str, Any], language: Optional[str] = None) -> str:
-    resolved_language = resolve_language(language)
-    if resolved_language == "zh":
-        return "当前交易环境：真实盘"
-    return "Current trading mode: real trading"
 
 
 def add_environment_context(payload: Dict[str, Any], environment: Dict[str, Any]) -> None:
     payload["environment"] = environment
-    payload["user_environment_prefix"] = user_environment_prefix(environment)
 
 
 def validate_endpoint_constraints(
@@ -657,7 +648,7 @@ def main() -> int:
                 + "\n".join(f"- {issue}" for issue in environment_validation["issues"])
             )
         try:
-            ensure_private_runtime_ready(command=command_name, auto_setup=True, language=None)
+            ensure_private_runtime_ready(command=command_name, auto_setup=True)
         except RuntimePreflightError as exc:
             raise SystemExit(str(exc)) from exc
 

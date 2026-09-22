@@ -8,7 +8,7 @@ import importlib
 import json
 import subprocess
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from weex_agent_state import refresh_agent_records, requirements_lock_path, requirements_path
 
@@ -35,7 +35,7 @@ def run_command(command: list[str]) -> dict[str, Any]:
     }
 
 
-def build_setup_report(language: Optional[str] = None) -> dict[str, Any]:
+def build_setup_report() -> dict[str, Any]:
     pip_version = run_command([sys.executable, "-m", "pip", "--version"])
     available_before = pip_version["returncode"] == 0
 
@@ -78,7 +78,7 @@ def build_setup_report(language: Optional[str] = None) -> dict[str, Any]:
         }
 
     importlib.invalidate_caches()
-    runtime_records = refresh_agent_records(preferred_language=language, command="env.setup")
+    runtime_records = refresh_agent_records(command="env.setup")
     runtime_state = runtime_records["runtime"]
     ok = (
         install_result["returncode"] == 0
@@ -108,11 +108,6 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--language",
-        default=None,
-        help="Optional zh/en language override used when refreshing agent state.",
-    )
-    parser.add_argument(
         "--pretty",
         action="store_true",
         help="Pretty-print JSON output for easier reading.",
@@ -122,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    payload = build_setup_report(language=args.language)
+    payload = build_setup_report()
     output_json(payload, args.pretty)
     return 0 if payload["ok"] else 1
 

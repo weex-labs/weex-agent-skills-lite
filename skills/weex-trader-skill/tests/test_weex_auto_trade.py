@@ -109,6 +109,26 @@ def complete_spot_symbol_facts(*, maker_fee="0", taker_fee="0"):
 
 
 class AutoTradeStateSchemaTests(unittest.TestCase):
+    def test_machine_error_contract_always_exposes_code_params_and_next_action(self) -> None:
+        cli_module = load_cli_module()
+        payload = cli_module._error_payload("INVALID_REQUEST", "invalid", "FIX_REQUEST")
+        self.assertEqual(payload["error"]["code"], "INVALID_REQUEST")
+        self.assertEqual(payload["error"]["params"], {})
+        self.assertEqual(payload["next_action"], "FIX_REQUEST")
+
+    def test_submit_auto_requires_language(self) -> None:
+        cli_module = load_cli_module()
+        payload = {
+            "strategy_id": "strategy_1",
+            "authorization_id": "authorization_1",
+            "idempotency_key": "request_1",
+            "operation_key": "spot.order.place_order",
+            "orders": [],
+        }
+
+        with self.assertRaises(cli_module.FacadeError):
+            cli_module._validate_command_payload("submit-auto", payload)
+
     def test_v4_validity_constraint_migrates_without_data_loss_and_accepts_720_hours(self) -> None:
         state_module = load_state_module()
 
@@ -3136,6 +3156,8 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                     "authorization_id": authorization["authorization_id"],
                     "idempotency_key": "facade-submit-1",
                     "operation_key": "spot.order.place_order",
+                    "language": "zh",
+                    "input_language": "zh",
                     "orders": [
                         {
                             "symbol": "BTCUSDT",
@@ -3162,6 +3184,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertEqual(worker_call["not_before"].second, 0)
             self.assertEqual(worker_call["not_before"].microsecond, 0)
             self.assertEqual(worker_call["not_before"].tzinfo, UTC)
+            self.assertEqual(worker_call["language"], "zh-CN")
 
     def test_submit_auto_manual_fallback_creates_bound_pending_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3208,6 +3231,8 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                         "idempotency_key": "facade-submit-fallback",
                         "operation_key": "spot.order.place_order",
                         "orders": [order],
+                        "language": "zh",
+                        "input_language": "zh",
                     },
                     confirm_live=True,
                 )
@@ -3225,6 +3250,13 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertEqual(result["user_confirmation"]["reply_text"], "确认")
             self.assertIn("本次订单超过自动交易授权范围，尚未下单", result["user_confirmation"]["reply_instruction"])
             self.assertIn("确认后回复：确认", result["user_confirmation"]["reply_instruction"])
+            self.assertTrue(result["user_confirmation"]["render_verbatim"])
+            self.assertEqual(
+                result["user_confirmation"]["reply_instruction_digest"],
+                hashlib.sha256(
+                    result["user_confirmation"]["reply_instruction"].encode("utf-8")
+                ).hexdigest(),
+            )
             self.assertIn("申请自动交易授权", result["authorization_hint"])
             fallback_event = next(
                 event
@@ -3233,6 +3265,63 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             self.assertEqual(fallback_event["severity"], "EXCEPTION")
             self.assertEqual(fallback_event["payload"]["error_code"], "SINGLE_LIMIT_EXCEEDED")
+
+    def test_submit_auto_manual_fallback_uses_supported_input_locale(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            state, cli_module, profile, strategy, authorization = self._authorized_fixture(
+                Path(tempdir)
+            )
+            captured: list[dict] = []
+            runtime = SimpleNamespace(
+                risk_payload_provider=Mock(), risk_evaluator=Mock(), facts_provider=Mock(), submitter=Mock()
+            )
+            facade = cli_module.AutoTradeFacade(
+                state,
+                account_resolver=lambda: profile,
+                auto_trade_runtime_factory=lambda account_id: runtime,
+                manual_intent_writer=captured.append,
+            )
+            order = {
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "LIMIT",
+                "timeInForce": "GTC",
+                "quantity": "1",
+                "price": "120",
+            }
+            guard_result = {
+                "ok": False,
+                "status": "MANUAL_CONFIRMATION_REQUIRED",
+                "error": {"code": "SINGLE_LIMIT_EXCEEDED"},
+                "advisory_alerts": [],
+                "blocking_reasons": [],
+                "next_action": "PREVIEW_AND_CONFIRM_ORDER_MANUALLY",
+            }
+            with patch.object(cli_module, "submit_authorized_order", return_value=guard_result):
+                result = facade.execute(
+                    "submit-auto",
+                    {
+                        "strategy_id": strategy["strategy_id"],
+                        "authorization_id": authorization["authorization_id"],
+                        "idempotency_key": "facade-submit-fallback-en",
+                        "operation_key": "spot.order.place_order",
+                        "orders": [order],
+                        "input_language": "ja",
+                    },
+                    confirm_live=True,
+                )
+
+            self.assertEqual(result["user_confirmation"]["language"], "ja")
+            self.assertEqual(result["user_confirmation"]["language_source"], "detected")
+            self.assertEqual(result["user_confirmation"]["input_language"], "ja")
+            self.assertNotIn("fallback_reason", result["user_confirmation"])
+            self.assertEqual(result["language_source"], "detected")
+            self.assertEqual(result["input_language"], "ja")
+            self.assertNotIn("fallback_reason", result)
+            self.assertEqual(result["user_confirmation"]["reply_text"], "確認")
+            self.assertIn("確認後", result["user_confirmation"]["reply_instruction"])
+            self.assertEqual(captured[0]["confirmation_language"], "ja")
+            self.assertEqual(captured[0]["confirmation_reply_text"], "確認")
 
     def test_submit_auto_unknown_operation_does_not_create_unusable_confirmation_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3256,6 +3345,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                     "idempotency_key": "facade-unknown-fallback",
                     "operation_key": "transaction.unknown_order",
                     "orders": [{"symbol": "BTCUSDT"}],
+                    "language": "en",
                 },
                 confirm_live=True,
             )
@@ -3391,6 +3481,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                         "authorization_id": authorization["authorization_id"],
                         "idempotency_key": "post-submit-state-failure",
                         "operation_key": "spot.order.place_order",
+                        "language": "en",
                         "orders": [
                             {
                                 "symbol": "BTCUSDT",
@@ -3474,6 +3565,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                         "authorization_id": authorization["authorization_id"],
                         "idempotency_key": "unrecorded-uncertainty",
                         "operation_key": "spot.order.place_order",
+                        "language": "en",
                         "orders": [
                             {
                                 "symbol": "BTCUSDT",
@@ -3623,6 +3715,52 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                     for event in state.list_events(strategy_id=strategy["strategy_id"])
                 )
             )
+
+    def test_notification_dispatch_passes_requested_language_to_adapter(self) -> None:
+        notify_module = load_notify_module()
+        claim = {
+            "kind": "EXCEPTION",
+            "notification_key": "event:evt_language",
+            "strategy_name": "fixture",
+            "event_type": "USAGE_REVIEW_REQUIRED",
+        }
+
+        class FakeState:
+            def __init__(self):
+                self.completed = []
+
+            def claim_notifications(self, *, now=None):
+                return [claim]
+
+            def complete_notification(self, *, notification_key, outcome, now=None):
+                self.completed.append((notification_key, outcome))
+                return {"ok": True}
+
+        received = []
+
+        def adapter(payload):
+            received.append(payload)
+            return None
+
+        state = FakeState()
+        results = notify_module.dispatch_notification_claims(state, adapter, language="zh")
+
+        self.assertEqual(received[0]["language"], "zh-CN")
+        self.assertIn("自动交易提醒", notify_module.build_notification_text(received[0])[0])
+        self.assertEqual(results[0]["status"], "DELIVERED")
+
+    def test_notification_worker_launcher_keeps_language(self) -> None:
+        notify_module = load_notify_module()
+        with patch.object(notify_module.subprocess, "Popen") as popen:
+            notify_module.launch_notification_worker(
+                state_path="/tmp/weex-state.sqlite3",
+                notification_key="summary:fixture",
+                not_before=datetime(2026, 9, 14, 12, 0, tzinfo=UTC),
+                language="zh",
+            )
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[-2:], ["--language", "zh-CN"])
 
     def test_recovery_commands_resolve_uncertain_usage_and_expose_enable_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -4707,6 +4845,7 @@ class AutoTradeNotificationAdapterTests(unittest.TestCase):
                 notification_key=notification_key,
                 not_before=window_start.replace(minute=1),
                 adapter=delivered.append,
+                language="en",
                 now_provider=lambda: clock.current,
                 sleep=clock.sleep,
             )
@@ -4748,7 +4887,7 @@ class AutoTradeNotificationAdapterTests(unittest.TestCase):
             raise RuntimeError("injected notification failure")
 
         state = FakeState()
-        results = notify_module.dispatch_notification_claims(state, failing_adapter)
+        results = notify_module.dispatch_notification_claims(state, failing_adapter, language="en")
 
         self.assertEqual(attempts, ["event:evt_fixture"])
         self.assertEqual(state.completed, [("event:evt_fixture", "FAILED")])
@@ -4762,7 +4901,7 @@ class AutoTradeNotificationAdapterTests(unittest.TestCase):
         with patch.object(notify_module.platform, "system", return_value="Windows"), patch.object(
             notify_module.shutil, "which", return_value="powershell.exe"
         ), patch.object(notify_module.subprocess, "run", return_value=completed) as run:
-            adapter({"kind": "EXCEPTION", "strategy_name": "fixture", "event_type": "TEST"})
+            adapter({"kind": "EXCEPTION", "strategy_name": "fixture", "event_type": "TEST", "language": "en"})
         self.assertGreater(run.call_args.kwargs["timeout"], 5.5)
 
     def test_notification_timeout_is_recorded_as_unknown(self) -> None:
@@ -4791,7 +4930,7 @@ class AutoTradeNotificationAdapterTests(unittest.TestCase):
             side_effect=subprocess.TimeoutExpired(cmd=["osascript"], timeout=7),
         ):
             state = FakeState()
-            results = notify_module.dispatch_notification_claims(state, adapter)
+            results = notify_module.dispatch_notification_claims(state, adapter, language="en")
         self.assertEqual(results[0]["status"], "UNKNOWN")
         self.assertEqual(state.completed, [("event:evt_timeout", "UNKNOWN")])
 

@@ -16,6 +16,10 @@
     "open_if_needed": {
       "file_level_details": "file-index.json",
       "script_operations": "references/script-operations.md",
+      "message_templates": "references/message-templates.md",
+      "locales": "references/locales/*.json",
+      "openclaw_language_contract": "references/openclaw-language-contract.md",
+      "user_presenter": "scripts/weex_user_presenter.py",
       "auth_and_signing": "references/auth-and-signing.md",
       "troubleshooting": "references/troubleshooting.md"
     }
@@ -68,7 +72,7 @@
   ],
   "safety": {
     "live_confirmation": "--confirm-live",
-    "demo_confirmation": "--trading-mode demo --confirm-demo",
+    "demo_support": "removed; live trading only",
     "natural_language_orders": "preview before submit and exact independent confirmation",
     "secret_transport": "runtime environment only; never argv or payload"
   }

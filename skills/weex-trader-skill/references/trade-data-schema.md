@@ -15,7 +15,7 @@ This schema is used internally by the trade guard and automated-authorization ru
 }
 ```
 
-`live` and `demo` are internal values. User-facing text must use `真实盘` and `模拟盘`. Demo facts are only from official simulated futures endpoints.
+Only `live` is a supported internal trading mode. User-facing text must use the real-trading prefix and real-funds warning. Simulated futures facts are not part of the runtime surface.
 
 ## Account and order facts
 

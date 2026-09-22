@@ -21,6 +21,7 @@ import weex_order_intent_state  # noqa: E402
 import weex_trade_guard  # noqa: E402
 import weex_trade_data_aggregator  # noqa: E402
 import weex_spot_api  # noqa: E402
+import weex_message_templates  # noqa: E402
 
 
 class TradeGuardRegressionTests(unittest.TestCase):
@@ -36,6 +37,62 @@ class TradeGuardRegressionTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.environment_patch.stop()
+
+    def test_trade_guard_language_gate_maps_supported_input_to_locale(self) -> None:
+        args = weex_trade_guard.build_parser().parse_args(
+            [
+                "preview-order",
+                "--market",
+                "spot",
+                "--order-json",
+                "{}",
+                "--input-language",
+                "ja",
+            ]
+        )
+        weex_trade_guard._resolve_cli_language(args)
+        self.assertEqual(args.language, "ja")
+        self.assertEqual(args.language_decision.source, "detected")
+        self.assertIsNone(args.language_decision.fallback_reason)
+
+    def test_trade_guard_language_gate_rejects_conflicting_render_language(self) -> None:
+        args = weex_trade_guard.build_parser().parse_args(
+            [
+                "preview-order",
+                "--market",
+                "spot",
+                "--order-json",
+                "{}",
+                "--input-language",
+                "ja",
+                "--language",
+                "zh",
+            ]
+        )
+        with self.assertRaises(weex_trade_guard.AggregationInputError):
+            weex_trade_guard._resolve_cli_language(args)
+
+    def test_trade_guard_language_gate_requires_a_language_signal(self) -> None:
+        args = weex_trade_guard.build_parser().parse_args(
+            ["preview-order", "--market", "spot", "--order-json", "{}"]
+        )
+        with self.assertRaises(weex_trade_guard.AggregationInputError):
+            weex_trade_guard._resolve_cli_language(args)
+
+    def test_confirmation_rejects_language_change_after_preview(self) -> None:
+        intent = {"confirmation_language": "en"}
+        self.assertFalse(
+            weex_trade_guard._intent_language_matches(
+                intent,
+                argparse.Namespace(language="zh"),
+            )
+        )
+        self.assertTrue(
+            weex_trade_guard._intent_language_matches(
+                intent,
+                argparse.Namespace(language="en"),
+            )
+        )
 
     @staticmethod
     def _spot_preview_payload_from_raw(raw_order: dict[str, object]) -> dict[str, object]:
@@ -144,7 +201,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
                 "transaction.place_pending_order": Endpoint("transaction.place_pending_order"),
             },
             normalize_contract_trade_symbol=lambda value: value,
-            normalize_contract_demo_trade_symbol=lambda value: value,
             validate_endpoint_trading_mode=lambda endpoint, mode: mode,
             generate_client_oid=lambda: "oid",
         )
@@ -161,6 +217,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     "triggerPrice": "70000",
                     "workingType": "MARK_PRICE",
                 },
+                language="en",
             )
         self.assertEqual(result["orderId"], "1")
         self.assertEqual(captured["endpoint"], "transaction.place_pending_order")
@@ -198,7 +255,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
             weex_trade_guard, "_build_contract_client", return_value=(api, object())
         ):
             result = weex_trade_guard._submit_order(
-                market="futures", trading_mode="live", raw_order=order
+                market="futures", trading_mode="live", raw_order=order, language="en"
             )
         self.assertEqual(result["orderId"], "close-1")
 
@@ -356,7 +413,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
                 risk_signature=intent["risk_signature"],
                 trading_mode="live",
                 confirm_live=True,
-                confirm_demo=False,
                 user_reply="确认",
                 profile="profile",
                 language="zh",
@@ -471,6 +527,13 @@ class TradeGuardRegressionTests(unittest.TestCase):
             "单笔金额和有效期范围内，下单无需逐笔确认。发送“申请自动交易授权”即可开始配置。",
             result["user_confirmation"]["reply_instruction"],
         )
+        self.assertTrue(result["user_confirmation"]["render_verbatim"])
+        self.assertEqual(
+            result["user_confirmation"]["reply_instruction_digest"],
+            weex_message_templates.confirmation_instruction_digest(
+                result["user_confirmation"]["reply_instruction"]
+            ),
+        )
 
     def test_confirm_requires_exact_user_reply_and_blocks_review_required_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -495,7 +558,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     risk_signature=intent["risk_signature"],
                     trading_mode="live",
                     confirm_live=True,
-                    confirm_demo=False,
                     user_reply="wrong",
                     profile="profile",
                     language="zh",
@@ -536,7 +598,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     risk_signature=intent["risk_signature"],
                     trading_mode="live",
                     confirm_live=True,
-                    confirm_demo=False,
                     user_reply="确认",
                     language="zh",
                     pretty=False,
@@ -618,7 +679,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     risk_signature=intent["risk_signature"],
                     trading_mode="live",
                     confirm_live=True,
-                    confirm_demo=False,
                     user_reply="确认",
                     profile="profile",
                     language="zh",
@@ -692,7 +752,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     risk_signature=intent["risk_signature"],
                     trading_mode="live",
                     confirm_live=True,
-                    confirm_demo=False,
                     user_reply="确认",
                     profile="profile",
                     language="zh",
@@ -749,7 +808,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     risk_signature=intent["risk_signature"],
                     trading_mode="live",
                     confirm_live=True,
-                    confirm_demo=False,
                     user_reply="确认",
                     profile="profile",
                     language="zh",
@@ -833,12 +891,13 @@ class TradeGuardRegressionTests(unittest.TestCase):
             pretty=False,
         )
         with mock.patch.object(weex_trade_guard, "TradeDataAggregator") as aggregator:
-            self.assertEqual(weex_trade_guard.cmd_preview_order(args), 1)
+            with self.assertRaisesRegex(weex_trade_guard.AggregationInputError, "DEMO_MODE_REMOVED"):
+                weex_trade_guard.cmd_preview_order(args)
         aggregator.assert_not_called()
 
     def test_cancel_preview_and_confirm_commands_are_exposed(self) -> None:
         parser = weex_trade_guard.build_parser()
-        args = parser.parse_args(["preview-cancel", "--market", "futures", "--order-id", "1"])
+        args = parser.parse_args(["preview-cancel", "--market", "futures", "--order-id", "1", "--language", "en"])
         self.assertEqual(args.command, "preview-cancel")
 
     def test_cancel_confirm_uses_the_official_cancel_endpoint(self) -> None:
@@ -859,7 +918,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
                 intent = weex_order_intent_state.load_intent()
                 confirm_args = argparse.Namespace(
                     profile="profile", intent_id=intent["intent_id"], risk_signature=intent["risk_signature"],
-                    user_reply="确认", confirm_live=False, pretty=False,
+                    user_reply="确认", confirm_live=False, language="zh", pretty=False,
                 )
                 api = FakeApi()
                 with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, object())):
@@ -892,17 +951,16 @@ class TradeGuardRegressionTests(unittest.TestCase):
         api = types.SimpleNamespace(
             ENDPOINTS={"transaction.place_order": Endpoint()},
             normalize_contract_trade_symbol=lambda value: value,
-            normalize_contract_demo_trade_symbol=lambda value: value,
             validate_endpoint_trading_mode=lambda endpoint, mode: mode,
             generate_client_oid=lambda: "oid",
         )
         order = {"symbol": "BTCUSDT", "side": "BUY", "positionSide": "LONG", "type": "MARKET", "quantity": "1"}
         with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, Client({"ok": True, "status": 200, "data": {"code": -1, "msg": "rejected"}}))):
             with self.assertRaises(weex_trade_guard.AggregationInputError):
-                weex_trade_guard._submit_order(market="futures", trading_mode="live", raw_order=order)
+                weex_trade_guard._submit_order(market="futures", trading_mode="live", raw_order=order, language="en")
         with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, Client({"ok": False, "status": None, "error": {"message": "timeout"}}))):
             with self.assertRaises(weex_trade_guard.SubmissionUncertainError):
-                weex_trade_guard._submit_order(market="futures", trading_mode="live", raw_order=order)
+                weex_trade_guard._submit_order(market="futures", trading_mode="live", raw_order=order, language="en")
 
     def test_spot_private_mode_is_explicit_and_payload_schema_is_enforced(self) -> None:
         with self.assertRaises(SystemExit):

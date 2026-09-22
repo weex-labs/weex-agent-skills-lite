@@ -2,7 +2,7 @@
   "schema_version": 1,
   "purpose": "OpenClaw Trader Lite file guide.",
   "file_guide": {
-    "scripts/weex_contract_api.py": {"role": "Futures REST, official demo routing, market/account/order operations."},
+    "scripts/weex_contract_api.py": {"role": "Live Futures REST market/account/order operations; simulated endpoints are rejected."},
     "scripts/weex_spot_api.py": {"role": "Spot REST market/account/order operations."},
     "scripts/weex_trade_guard.py": {"role": "Preview, confirmation, TP/SL, cancellation, and guarded submission."},
     "scripts/weex_order_intent_state.py": {"role": "Pending preview TTL, environment-account, and risk-signature binding."},
@@ -11,6 +11,8 @@
     "scripts/weex_auto_trade_amount.py": {"role": "Conservative Spot/Futures valuation for authorization quota checks."},
     "scripts/weex_auto_trade_runtime.py": {"role": "Environment-authenticated official facts, submission, and reconciliation boundary."},
     "scripts/weex_auto_trade_notify.py": {"role": "Credential-free authorization notifications."},
+    "scripts/weex_message_templates.py": {"role": "Shared locale-file-backed user-facing message templates."},
+    "scripts/weex_user_presenter.py": {"role": "User-facing presentation boundary for localized confirmations, fallback and notifications."},
     "scripts/weex_trade_data_aggregator.py": {"role": "Internal account/market facts used by guards; no conversational analysis surface."},
     "scripts/weex_trade_risk_review.py": {"role": "Internal automatic-authorization rule evaluator."},
     "scripts/weex_risk_review_core.py": {"role": "Internal safety rules consumed by automatic authorization."},
@@ -30,6 +32,9 @@
     "references/auth-and-signing.md": {"role": "Environment-only private REST signing reference."},
     "references/script-operations.md": {"role": "CLI and automated-authorization operations."},
     "references/trade-data-schema.md": {"role": "Internal fact schema."},
+    "references/message-templates.md": {"role": "Review catalog for locale-backed user-facing message coverage."},
+    "references/locales/": {"role": "Locale JSON files containing the complete user-facing template catalog."},
+    "references/openclaw-language-contract.md": {"role": "OpenClaw input-to-render language decision and confirmation contract."},
     "references/troubleshooting.md": {"role": "Operator-visible failures and recovery."},
     "references/updates.md": {"role": "Maintainer packaging and release guidance."},
     "references/websocket.md": {"role": "Official market-stream reference; no local monitor task."}

@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from weex_language import resolve_language
+from weex_user_presenter import present_notification
+
 
 class NotificationState(Protocol):
     def claim_notifications(
@@ -35,12 +38,23 @@ class NotificationState(Protocol):
 NotificationAdapter = Callable[[dict[str, Any]], Any]
 
 
+def build_notification_text(
+    claim: dict[str, Any],
+    language: str | None = None,
+) -> tuple[str, str]:
+    selected = language or claim.get("language")
+    if not isinstance(selected, str) or not selected:
+        raise ValueError("notification language is required")
+    return present_notification(claim, selected)
+
+
 def dispatch_notification_claims(
     state: NotificationState,
     adapter: NotificationAdapter,
     *,
     now: datetime | None = None,
     notification_key: str | None = None,
+    language: str,
 ) -> list[dict[str, Any]]:
     """Claim, attempt once, and record a result without changing business state."""
     results: list[dict[str, Any]] = []
@@ -48,9 +62,10 @@ def dispatch_notification_claims(
         claims = state.claim_notifications(now=now)
     else:
         claims = state.claim_notifications(now=now, notification_key=notification_key)
+    resolved_language = resolve_language(language)
     for claim in claims:
         try:
-            adapter_result = adapter(claim)
+            adapter_result = adapter({**claim, "language": resolved_language})
             outcome = "UNKNOWN" if adapter_result == "UNKNOWN" else "DELIVERED"
         except Exception:
             outcome = "FAILED"
@@ -75,6 +90,7 @@ def run_notification_worker(
     notification_key: str,
     not_before: datetime,
     adapter: NotificationAdapter,
+    language: str,
     now_provider: Callable[[], datetime] | None = None,
     sleep: Callable[[float], Any] = time.sleep,
 ) -> list[dict[str, Any]]:
@@ -99,6 +115,7 @@ def run_notification_worker(
         adapter,
         now=current,
         notification_key=notification_key,
+        language=language,
     )
 
 
@@ -107,6 +124,7 @@ def launch_notification_worker(
     state_path: str | Path,
     notification_key: str,
     not_before: datetime,
+    language: str,
 ) -> None:
     """Detach a credential-free worker for one accepted-summary notification key."""
     deadline = _aware_utc(not_before, "not_before")
@@ -120,6 +138,7 @@ def launch_notification_worker(
         "--not-before",
         deadline.isoformat(timespec="microseconds").replace("+00:00", "Z"),
     ]
+    command.extend(["--language", resolve_language(language)])
     popen_options: dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -148,23 +167,6 @@ def _parse_time(value: str) -> datetime:
     except (AttributeError, ValueError) as exc:
         raise ValueError("not_before must be an ISO-8601 timestamp") from exc
     return _aware_utc(parsed, "not_before")
-
-
-def build_notification_text(claim: dict[str, Any]) -> tuple[str, str]:
-    strategy = str(claim.get("strategy_name") or "WEEX strategy")
-    if claim.get("kind") == "ACCEPTED_SUMMARY":
-        title = f"WEEX auto-trade summary: {strategy}"
-        modules = ", ".join(str(item) for item in claim.get("modules", []))
-        symbols = ", ".join(str(item) for item in claim.get("symbols", []))
-        body = (
-            f"{claim.get('order_count', 0)} orders; {modules}; {symbols}; "
-            f"estimated {claim.get('estimated_amount_u', 'unknown')} U; "
-            f"remaining {claim.get('remaining_amount_u', 'unknown')} U"
-        )
-        return title, body
-    title = f"WEEX auto-trade attention: {strategy}"
-    body = f"{claim.get('event_type', 'UNKNOWN_EVENT')}; inspect the local event timeline"
-    return title, body
 
 
 class SystemNotificationAdapter:
@@ -234,6 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-path", required=True)
     parser.add_argument("--notification-key", required=True)
     parser.add_argument("--not-before", required=True)
+    parser.add_argument("--language", required=True)
     return parser
 
 
@@ -245,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
             notification_key=args.notification_key,
             not_before=_parse_time(args.not_before),
             adapter=SystemNotificationAdapter(),
+            language=args.language,
         )
     except Exception:
         return 1
